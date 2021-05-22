@@ -1,0 +1,164 @@
+﻿#pragma kernel Simulate
+
+RWStructuredBuffer<float4> simulationBuffer;
+RWStructuredBuffer<float4> positionBuffer;
+uint iFrame;
+
+
+float4 Load(in int id)
+{
+    return simulationBuffer[id];
+}
+
+#define wrapFrame 3000U
+#define nbPart 512U
+#define restitution (13. / 16.)
+#define dropper (1.f)
+#define scale (1. / 40.)
+#define baseGravity (9.8 / 200.)
+
+#define TAU  radians(360.)
+#define PI   radians(180.)
+
+// https://www.shadertoy.com/view/4djSRW
+float3 hash31(float p)
+{
+    float3 p3 = frac(float3(p, p, p) * float3(.1031, .1030, .0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.xxy + p3.yzz) * p3.zyx);
+}
+
+
+float intToRad(in int a)
+{
+    return float(a) * TAU / 1024.;
+}
+
+float4 spawnNewParticle(in int f)
+{
+    float4 dotInfo;
+    if (f < 500)
+    {
+        dotInfo.x = sin(intToRad(f * 11)) * 40. * scale;
+        dotInfo.y = cos(intToRad(f * 13)) * 10. * scale + dropper;
+        dotInfo.z = sin(intToRad(f * 17)) * 40. * scale;
+        dotInfo.w = 0.;
+    }
+    else if (f < 900)
+    {
+        dotInfo.x = cos(intToRad(f * 15)) * 55. * scale;
+        dotInfo.y = dropper;
+        dotInfo.z = sin(intToRad(f * 15)) * 55. * scale;
+        dotInfo.w = 2.5;
+    }
+    else if (f < 1700)
+    {
+        float a = sin(intToRad(f)) * 256. / 8.;
+        dotInfo.x = cos(intToRad(f * 66)) * a * scale;
+        dotInfo.y = 0.;
+        dotInfo.z = sin(intToRad(f * 66)) * a * scale;
+        dotInfo.w = 5.;
+    }
+    else if (f < 2360)
+    {
+        float3 rand = hash31(float(f));
+        float a = rand.x * 2.0 * PI;
+        float h = rand.y;
+        float r = sqrt(rand.z) * 2.;
+        dotInfo.x = r * cos(a);
+        dotInfo.y = h;
+        dotInfo.z = r * sin(a);
+        dotInfo.w = 0.;
+    }
+    else
+    {
+        dotInfo = float4(float3(4000., 4000., 4000.), 0);
+    }
+
+    return dotInfo;
+}
+
+float4 update(in float4 dotInfo, in int f)
+{
+    float oldY = dotInfo.y;
+    float gravity = baseGravity * smoothstep(2000., 1900., float(f));
+    dotInfo.y += dotInfo.w / 200.;
+    dotInfo.w -= gravity;
+    if (dotInfo.y < 0.)
+    {
+        float r = oldY / (oldY - dotInfo.y);
+        dotInfo.y = -dotInfo.y * restitution;
+        dotInfo.w = (-2. * gravity * (1. - r) - dotInfo.w) * restitution;		// This make the bounce almost perfect, this point that annoyed my eye a little in the original demo. But let say, it's an old demo from the integer time, much easier to fix today :)
+    }
+    return dotInfo;
+}
+
+float2 pR(in float2 p, float a)
+{
+    return cos(a) * p + sin(a) * float2(p.y, -p.x);
+}
+
+
+
+[numthreads(64, 1, 1)]
+void Simulate(uint3 id : SV_DispatchThreadID)
+{
+    uint pixId = id.x;
+    float4	dotInfo;
+    if (iFrame == 0)
+    {
+        dotInfo = float4(float3(4000., 4000., 4000.), 0);
+    }
+    else
+    {
+        dotInfo = Load(pixId);
+    }
+
+
+    uint f = iFrame % wrapFrame;
+
+    if ((f % nbPart) == pixId)
+    {
+        dotInfo = spawnNewParticle(f);
+    }
+
+    dotInfo = update(dotInfo, f);
+
+    simulationBuffer[pixId] = dotInfo;
+
+
+    // Update Scale
+    const float ballRadius = 0.05;
+    const float globalScale = 1.5;
+
+    float lifeSpan;
+    if (pixId > (iFrame % nbPart))
+    {
+        lifeSpan = float(pixId - (iFrame % nbPart)) / float(nbPart);
+    }
+    else
+    {
+        lifeSpan = float(nbPart + pixId - (iFrame % nbPart)) / float(nbPart);
+    }
+
+    float fadeGap = 0.02f;
+    float sc = ballRadius * smoothstep(0.f, fadeGap, lifeSpan) * smoothstep(1.f, 1.f - fadeGap, lifeSpan);
+
+    if (pixId > iFrame)
+        sc = 0.0;
+
+    const int finalFrame = 2100;
+    const int fadeDuration = 120;
+
+    sc *= smoothstep(float(finalFrame), float(finalFrame - fadeDuration), float(iFrame));
+
+    // Rotation
+    float a1 = sin(float(f) * 1. / 60.f) * radians(90.);
+    float a2 = (float(f - 1900) * 1. / 60.f) * 3.;
+    float rotationY = lerp(a1, a2, clamp((float(f) - 1900.) / 100., 0., 1.));
+    dotInfo.xz = pR(dotInfo.xz, rotationY);
+
+    positionBuffer[pixId] = float4(dotInfo.xyz * globalScale, sc);
+
+}
+

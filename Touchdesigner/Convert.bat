@@ -1,0 +1,2 @@
+rem ffmpeg\ffmpeg -i videos\FirstReality60hz.mp4 -vcodec copy -acodec copy videos\FirstReality60hz.mov
+ffmpeg\ffmpeg -i videos\FirstReality60hz.mp4 -c:v libx265 -an -x265-params crf=25 videos\FirstReality60hz.mov
